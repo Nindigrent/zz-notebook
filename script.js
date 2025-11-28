@@ -1,3 +1,15 @@
+// Supabase配置
+const SUPABASE_URL = 'https://fjhyxlwlqupvbbppahtj.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_L8-l8pc7HcIhU27EUSaGwA_TlvWAlBY';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// 应用状态
+const appState = {
+    currentUser: 'girl',
+    currentView: 'today',
+    records: [],
+    currentImage: null
+};
 // 应用状态
 const appState = {
     currentUser: 'girl', // 当前用户
@@ -24,10 +36,11 @@ const girlCountElement = document.getElementById('girl-count');
 const boyCountElement = document.getElementById('boy-count');
 
 // 初始化应用
-function initApp() {
+async function initApp() {
     updateDateDisplay();
-    loadFromLocalStorage();
+    await loadFromCloud(); // 改为从云端加载
     setupEventListeners();
+    setupRealtimeSubscription(); // 添加实时同步
     renderRecords();
     updateStats();
 }
@@ -39,18 +52,112 @@ function updateDateDisplay() {
     document.getElementById('current-date').textContent = now.toLocaleDateString('zh-CN', options);
 }
 
-// 从本地存储加载数据
-function loadFromLocalStorage() {
-    const savedRecords = localStorage.getItem('coupleRecords');
-    
-    if (savedRecords) {
-        appState.records = JSON.parse(savedRecords);
+// 从Supabase加载数据
+async function loadFromCloud() {
+    try {
+        // 获取最近7天的记录
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        
+        const { data, error } = await supabase
+            .from('couple_records')
+            .select('*')
+            .gte('created_at', sevenDaysAgo.toISOString())
+            .order('created_at', { ascending: false });
+            
+        if (error) throw error;
+        
+        appState.records = data || [];
+        
+    } catch (error) {
+        console.error('从云端加载失败:', error);
+        showNotification('加载数据失败，请检查网络连接', 'error');
+        // 使用空数组继续运行
+        appState.records = [];
     }
 }
 
-// 保存到本地存储
-function saveToLocalStorage() {
-    localStorage.setItem('coupleRecords', JSON.stringify(appState.records));
+// 保存记录到Supabase
+async function saveRecord() {
+    const timeSelect = document.getElementById('record-time');
+    const textArea = document.getElementById('record-text');
+    
+    const time = timeSelect.value;
+    const text = textArea.value.trim();
+    const image = appState.currentImage;
+    
+    if (!text && !image) {
+        showNotification('请输入内容或上传图片！', 'error');
+        return;
+    }
+    
+    const now = new Date();
+    const record = {
+        id: Date.now(),
+        user_type: appState.currentUser,
+        time_period: time,
+        content: text,
+        image_url: image,
+        record_date: now.toISOString().split('T')[0] // 只保存日期部分
+    };
+    
+    try {
+        // 保存到Supabase
+        const { data, error } = await supabase
+            .from('couple_records')
+            .insert([record]);
+            
+        if (error) throw error;
+        
+        // 保存成功后，添加到本地状态（注意字段名映射）
+        appState.records.unshift({
+            id: record.id,
+            user: record.user_type, // 映射回原来的字段名
+            time: record.time_period, // 映射回原来的字段名
+            text: record.content, // 映射回原来的字段名
+            image: record.image_url, // 映射回原来的字段名
+            date: now.toISOString(),
+            timestamp: now.getTime()
+        });
+        
+        renderRecords();
+        updateStats();
+        
+        // 重置表单
+        textArea.value = '';
+        imageInput.value = '';
+        imagePreview.style.display = 'none';
+        imagePreview.innerHTML = '';
+        appState.currentImage = null;
+        
+        showNotification('记录已保存！');
+        
+    } catch (error) {
+        console.error('保存失败:', error);
+        showNotification('保存失败，请检查网络连接', 'error');
+    }
+}
+
+// 设置实时同步
+function setupRealtimeSubscription() {
+    supabase
+        .channel('couple-records')
+        .on('postgres_changes', 
+            { 
+                event: '*', 
+                schema: 'public', 
+                table: 'couple_records' 
+            }, 
+            async (payload) => {
+                console.log('收到实时更新:', payload);
+                // 重新加载数据
+                await loadFromCloud();
+                renderRecords();
+                updateStats();
+                showNotification('收到新的记录更新!');
+            }
+        )
+        .subscribe();
 }
 
 // 设置事件监听器
@@ -154,7 +261,6 @@ function saveRecord() {
    };
     
     appState.records.unshift(record);
-    saveToLocalStorage();
     renderRecords();
     updateStats();
     
@@ -336,13 +442,26 @@ function generateReport() {
 }
 
 // 清除数据
-function clearData() {
+async function clearData() {
     if (confirm('确定要清除所有记录吗？此操作不可撤销！')) {
-        appState.records = [];
-        saveToLocalStorage();
-        renderRecords();
-        updateStats();
-        showNotification('所有记录已清除！');
+        try {
+            // 从Supabase删除所有记录
+            const { error } = await supabase
+                .from('couple_records')
+                .delete()
+                .neq('id', 0); // 删除所有记录
+                
+            if (error) throw error;
+            
+            appState.records = [];
+            renderRecords();
+            updateStats();
+            showNotification('所有记录已清除！');
+            
+        } catch (error) {
+            console.error('清除数据失败:', error);
+            showNotification('清除数据失败', 'error');
+        }
     }
 }
 
@@ -390,4 +509,5 @@ function shareReport() {
         // 如果复制失败，显示文本让用户手动复制
         prompt('请手动复制以下文本进行分享：', shareText);
     });
+
 }

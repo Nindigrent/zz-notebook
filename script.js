@@ -5,13 +5,6 @@ const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // 应用状态
 const appState = {
-    currentUser: 'girl',
-    currentView: 'today',
-    records: [],
-    currentImage: null
-};
-// 应用状态
-const appState = {
     currentUser: 'girl', // 当前用户
     currentView: 'today', // 当前视图
     records: [], // 所有记录
@@ -511,3 +504,4 @@ function shareReport() {
     });
 
 }
+
